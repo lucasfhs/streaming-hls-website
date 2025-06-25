@@ -183,7 +183,16 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-950 text-white font-sans flex flex-col">
       <header className="p-4 bg-black flex items-center justify-between shadow-md">
-        <h1 className="text-2xl font-bold text-blue-500">HLS Streaming</h1>
+        <div className="flex items-center justify-center gap-2">
+          <img
+            src="ChatGPT Image 16 de jun. de 2025, 16_52_18.png"
+            alt=""
+            className="h-12 rounded-2xl"
+          />
+          <h1 className="text-2xl font-bold text-white michroma-regular">
+            <span className="text-blue-500">HLS</span> Streaming
+          </h1>
+        </div>
       </header>
 
       <main className="flex flex-col md:flex-row gap-6 p-4 flex-1">
