@@ -1,0 +1,27 @@
+# Usa a imagem oficial do Node.js como base
+FROM node:22-alpine
+# Instala o FFmpeg e dependências necessárias
+RUN apk add --no-cache ffmpeg
+# Cria e define o diretório de trabalho
+WORKDIR /usr/src/app
+
+# Copia os arquivos de configuração do projeto
+COPY package*.json ./
+
+# Instala as dependências do projeto
+RUN npm install
+
+# Cria as pastas necessárias
+RUN mkdir -p public temp
+
+# Copia o arquivo de vídeo específico primeiro (para otimização de cache)
+COPY public/input.mp4 /usr/src/app/public/input.mp4
+
+# Copia todo o restante do código fonte
+COPY . .
+
+# Expõe a porta que o servidor vai usar (ajuste conforme necessário)
+EXPOSE 3000
+
+# Define o comando para iniciar a aplicação
+CMD ["npm", "run", "start"]
