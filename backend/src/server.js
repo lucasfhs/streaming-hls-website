@@ -51,18 +51,47 @@ function generateThumbnail(videoFile) {
   });
 }
 
-function ensureHLSFilesExist(videoName) {
+// Configurações para diferentes qualidades
+const qualityProfiles = [
+  {
+    name: "360p",
+    resolution: "640x360",
+    bandwidth: "800000",
+    masterPlaylistTag: "#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360",
+  },
+  {
+    name: "480p",
+    resolution: "854x480",
+    bandwidth: "1400000",
+    masterPlaylistTag: "#EXT-X-STREAM-INF:BANDWIDTH=1400000,RESOLUTION=854x480",
+  },
+  {
+    name: "720p",
+    resolution: "1280x720",
+    bandwidth: "2800000",
+    masterPlaylistTag:
+      "#EXT-X-STREAM-INF:BANDWIDTH=2800000,RESOLUTION=1280x720",
+  },
+];
+
+function ensureMultiQualityHLS(videoName) {
   return new Promise((resolve, reject) => {
     const inputVideo = path.join(videosDir, videoName);
     const videoBaseName = path.parse(videoName).name;
     const outputDir = path.join(outputBaseDir, videoBaseName);
-    const outputHLS = path.join(outputDir, "stream.m3u8");
+    const masterPlaylistPath = path.join(outputDir, "master.m3u8");
 
     if (!fs.existsSync(inputVideo)) {
       return reject(new Error(`Vídeo original não encontrado: ${inputVideo}`));
     }
 
-    if (fs.existsSync(outputHLS)) {
+    // Verifica se todos os arquivos já existem
+    const allQualitiesExist = qualityProfiles.every((quality) => {
+      const playlistPath = path.join(outputDir, `${quality.name}.m3u8`);
+      return fs.existsSync(playlistPath);
+    });
+
+    if (fs.existsSync(masterPlaylistPath)) {
       return resolve();
     }
 
@@ -70,22 +99,55 @@ function ensureHLSFilesExist(videoName) {
       fs.mkdirSync(outputDir, { recursive: true });
     }
 
-    exec(
-      `ffmpeg -i "${inputVideo}" \
-              -profile:v baseline -level 3.0 \
-              -s 640x360 -start_number 0 \
-              -hls_time 10 -hls_list_size 0 \
-              -f hls "${outputHLS}"`,
-      (err) => {
-        if (err) {
-          console.error("Erro ao converter vídeo:", err);
-          reject(err);
-        } else {
-          console.log(`Arquivos HLS gerados para ${videoName}`);
-          resolve();
-        }
-      }
-    );
+    // Gera playlists para cada qualidade
+    const conversionPromises = qualityProfiles.map((quality) => {
+      return new Promise((resolveQuality, rejectQuality) => {
+        const outputPlaylist = path.join(outputDir, `${quality.name}.m3u8`);
+
+        exec(
+          `ffmpeg -i "${inputVideo}" \
+                  -profile:v baseline -level 3.0 \
+                  -s ${quality.resolution} -start_number 0 \
+                  -hls_time 10 -hls_list_size 0 \
+                  -f hls "${outputPlaylist}"`,
+          (err) => {
+            if (err) {
+              console.error(
+                `Erro ao converter vídeo para ${quality.name}:`,
+                err
+              );
+              rejectQuality(err);
+            } else {
+              console.log(
+                `Arquivos HLS gerados para ${videoName} (${quality.name})`
+              );
+              resolveQuality();
+            }
+          }
+        );
+      });
+    });
+
+    // Quando todas as conversões estiverem prontas, cria o master playlist
+    Promise.all(conversionPromises)
+      .then(() => {
+        // Cria o master playlist
+        let masterPlaylistContent = "#EXTM3U\n";
+        qualityProfiles.forEach((quality) => {
+          masterPlaylistContent += `${quality.masterPlaylistTag}\n${quality.name}.m3u8\n`;
+        });
+
+        fs.writeFile(masterPlaylistPath, masterPlaylistContent, (err) => {
+          if (err) {
+            console.error("Erro ao criar master playlist:", err);
+            reject(err);
+          } else {
+            console.log(`Master playlist criada para ${videoName}`);
+            resolve();
+          }
+        });
+      })
+      .catch(reject);
   });
 }
 
@@ -156,7 +218,7 @@ app.get("/streams/:videoName/:file", async (req, res) => {
       }
 
       // Gera os arquivos HLS
-      await ensureHLSFilesExist(originalVideo);
+      await ensureMultiQualityHLS(originalVideo);
     }
 
     // Serve o arquivo
@@ -171,7 +233,7 @@ app.get("/streams/:videoName/:file", async (req, res) => {
 app.get("/watch/:videoName", async (req, res) => {
   try {
     const videoName = req.params.videoName;
-    await ensureHLSFilesExist(videoName);
+    await ensureMultiQualityHLS(videoName);
     servePlayer(res, videoName);
   } catch (err) {
     console.error("Erro ao preparar vídeo:", err);
@@ -181,7 +243,7 @@ app.get("/watch/:videoName", async (req, res) => {
 
 function servePlayer(res, videoName) {
   const videoBaseName = path.parse(videoName).name;
-  const hlsPath = `/streams/${videoBaseName}/stream.m3u8`;
+  const hlsPath = `/streams/${videoBaseName}/master.m3u8`;
 
   res.send(`
         <!DOCTYPE html>
@@ -189,20 +251,197 @@ function servePlayer(res, videoName) {
         <head>
             <title>Player HLS: ${videoName}</title>
             <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+            <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+            <style>
+                .player-container {
+                    max-width: 1280px;
+                    margin: 0 auto;
+                    position: relative;
+                }
+                #video {
+                    width: 100%;
+                }
+                .controls {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    padding: 10px;
+                    background: #222;
+                    color: white;
+                }
+                .settings-menu {
+                    position: relative;
+                    display: inline-block;
+                }
+                .settings-btn {
+                    background: none;
+                    border: none;
+                    color: white;
+                    font-size: 20px;
+                    cursor: pointer;
+                    padding: 5px 10px;
+                }
+                .settings-content {
+                    display: none;
+                    position: absolute;
+                    bottom: 40px;
+                    right: 0;
+                    background-color: #333;
+                    min-width: 160px;
+                    box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+                    z-index: 1;
+                    border-radius: 4px;
+                    padding: 10px;
+                }
+                .settings-content.show {
+                    display: block;
+                }
+                .quality-option {
+                    color: white;
+                    padding: 8px 16px;
+                    text-decoration: none;
+                    display: block;
+                    cursor: pointer;
+                }
+                .quality-option:hover {
+                    background-color: #444;
+                }
+                .quality-option.active {
+                    color: #4CAF50;
+                    font-weight: bold;
+                }
+                .current-quality {
+                    margin-left: 10px;
+                    font-size: 14px;
+                    color: #aaa;
+                }
+            </style>
         </head>
         <body>
-            <video id="video" width="640" controls></video>
+            <div class="player-container">
+                <video id="video" controls></video>
+                <div class="controls">
+                    <div></div> <!-- Espaço vazio para alinhamento -->
+                    <div class="settings-menu">
+                        <button class="settings-btn" id="settingsBtn">
+                            <i class="fas fa-cog"></i>
+                            <span class="current-quality" id="currentQuality">Auto</span>
+                        </button>
+                        <div class="settings-content" id="settingsContent">
+                            <div class="quality-option" data-quality="auto">Auto</div>
+                            <!-- As opções de qualidade serão adicionadas dinamicamente -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
             <script>
                 const video = document.getElementById('video');
-                if (Hls.isSupported()) {
-                    const hls = new Hls();
-                    hls.loadSource('${hlsPath}');
-                    hls.attachMedia(video);
-                    hls.on(Hls.Events.MANIFEST_PARSED, () => video.play());
-                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                    video.src = '${hlsPath}';
-                    video.addEventListener('loadedmetadata', () => video.play());
+                const settingsBtn = document.getElementById('settingsBtn');
+                const settingsContent = document.getElementById('settingsContent');
+                const currentQualityDisplay = document.getElementById('currentQuality');
+                let hls;
+                let availableQualities = [];
+                let manualQuality = 'auto';
+                
+                // Função para inicializar o player
+                function initPlayer() {
+                    if (hls) {
+                        hls.destroy();
+                    }
+                    
+                    if (Hls.isSupported()) {
+                        hls = new Hls({
+                            enableWorker: true,
+                            abrEwmaDefaultEstimate: 500000, // Estimativa inicial de banda (500kbps)
+                            maxStarvationDelay: 4,          // Máximo atraso permitido antes de reduzir qualidade
+                            maxLoadingDelay: 2,              // Máximo atraso de carregamento
+                            abrBandWidthFactor: 0.95,       // Fator de segurança para estimativa de banda
+                            abrBandWidthUpFactor: 0.7,      // Fator para considerar subir de qualidade
+                            abrMaxWithRealBitrate: true,    // Usar bitrate real para decisão ABR
+                        });
+                        
+                        hls.loadSource('${hlsPath}');
+                        hls.attachMedia(video);
+                        
+                        hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+                            console.log('Manifesto carregado, qualidades disponíveis:', data.levels);
+                            updateQualityOptions(data.levels);
+                            video.play();
+                        });
+                        
+                        hls.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
+                            if (manualQuality === 'auto') {
+                                const level = hls.levels[data.level];
+                                currentQualityDisplay.textContent = level ? level.height + 'p' : 'Auto';
+                            }
+                        });
+                        
+                    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                        video.src = '${hlsPath}';
+                        video.addEventListener('loadedmetadata', () => video.play());
+                        // Para Safari (que tem HLS nativo), não temos controle sobre as qualidades
+                        settingsBtn.style.display = 'none';
+                    }
                 }
+                
+                // Atualiza as opções de qualidade no menu
+                function updateQualityOptions(levels) {
+                    availableQualities = levels;
+                    const settingsContent = document.getElementById('settingsContent');
+                    
+                    // Limpa as opções existentes (exceto "Auto")
+                    while (settingsContent.children.length > 1) {
+                        settingsContent.removeChild(settingsContent.lastChild);
+                    }
+                    
+                    // Adiciona as novas opções
+                    levels.forEach((level, index) => {
+                        const option = document.createElement('div');
+                        option.className = 'quality-option';
+                        option.textContent = level.height + 'p';
+                        option.dataset.quality = index;
+                        option.addEventListener('click', () => {
+                            setManualQuality(index);
+                        });
+                        settingsContent.appendChild(option);
+                    });
+                }
+                
+                // Define a qualidade manualmente
+                function setManualQuality(quality) {
+                    if (quality === 'auto') {
+                        manualQuality = 'auto';
+                        currentQualityDisplay.textContent = 'Auto';
+                        hls.currentLevel = -1; // -1 significa auto
+                    } else {
+                        manualQuality = quality;
+                        hls.currentLevel = quality;
+                        currentQualityDisplay.textContent = hls.levels[quality].height + 'p';
+                    }
+                    
+                    // Atualiza a classe 'active' nas opções
+                    document.querySelectorAll('.quality-option').forEach(option => {
+                        option.classList.toggle('active', 
+                            (option.dataset.quality === quality.toString()) || 
+                            (quality === 'auto' && option.dataset.quality === 'auto')
+                        );
+                    });
+                }
+                
+                // Mostra/esconde o menu de configurações
+                settingsBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    settingsContent.classList.toggle('show');
+                });
+                
+                // Fecha o menu quando clicar fora
+                document.addEventListener('click', () => {
+                    settingsContent.classList.remove('show');
+                });
+                
+                // Inicializa o player
+                initPlayer();
             </script>
         </body>
         </html>
