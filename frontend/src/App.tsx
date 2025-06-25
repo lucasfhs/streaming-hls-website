@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import * as AspectRatio from "@radix-ui/react-aspect-ratio";
 import Hls from "hls.js";
 import { FaCog } from "react-icons/fa";
-import { capitalize } from "./utils/Capitalize";
+import { capitalize } from "./utils/capitalize";
 type VideoContent = {
   name: string;
   thumbnail: string; // Base64 ou URL
